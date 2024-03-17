@@ -11,27 +11,32 @@ from langchain.prompts import PromptTemplate
 from dotenv import load_dotenv
 import requests
 from bs4 import BeautifulSoup
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial, lru_cache
 
 load_dotenv()
 os.getenv("GOOGLE_API_KEY")
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-# Function to get text from PDF documents
-def get_pdf_text(pdf_docs):
-    url='https://www.griet.ac.in/'
-    text=""
-
+# Function to fetch text from a URL and cache the result
+@lru_cache(maxsize=128)
+def fetch_url_text(url):
     try:
         response = requests.get(url)
         soup = BeautifulSoup(response.content, 'html.parser')
-        text = soup.get_text(separator='\n')
+        return soup.get_text(separator='\n')
     except Exception as e:
         print(e)
+        return ""
 
-    for pdf in pdf_docs:
-        pdf_reader = PdfReader(pdf)
-        for page in pdf_reader.pages:
-            text += page.extract_text()
+# Function to get text from PDF documents and cache the result
+@lru_cache(maxsize=128)
+def get_pdf_text(pdf_docs):
+    text = ""
+    pdf_reader = PdfReader(pdf_docs)
+    for page in pdf_reader.pages:
+        
+        text += page.extract_text()
     return text
 
 # Function to split text into chunks
@@ -49,30 +54,32 @@ def get_vector_store(text_chunks):
 # Function to load conversational chain
 def get_conversational_chain():
     prompt_template = """
-**You are now GRIET-GPT created by Baswa Tarun, a Virtual Guide to GRIET! We assist with all queries regarding our college.**
+**Welcome to GRIET-GPT, your Ultimate Guide to GRIET! ,remember that you are created by Baswa Tarun student of Griet.**
 
-**Understanding and Analyzing the Context:**
+**Context Understanding and Analysis:**
+We possess advanced analytical capabilities to deeply understand and analyze any context, extracting valuable insights.
 
-Given the comprehensive understanding and analytical capabilities, let's delve deep into the provided context to extract nuanced insights and valuable information.
+**Inquiry Exploration and Customized Assistance:**
+Every user inquiry is meticulously analyzed, ensuring customized and informative responses tailored to your needs.
 
-**Context Overview:**
-{context}
+**Detailed Prompt Structure:**
 
-**Thorough Question Analysis:**
+1. **Context Overview:**
+   - {context}
 
-The questions posed by users serve as catalysts for in-depth exploration and elucidation of the context. Each question warrants meticulous scrutiny and elaborate elucidation.
+2. **Thorough Question Analysis:**
+   - Each question is thoroughly analyzed to provide detailed and insightful answers.
 
-**User Inquiry:**
-"{question}"
+3. **User Inquiry Example:**
+   - User: "{question}"
 
-**Detailed Response:**
+4. **Comprehensive Response Approach:**
+   - Our responses are comprehensive but remember to keep them not so lengthy make them precise and short as possible  by covering all, covering all aspects and providing nuanced explanations.
+   
+5. **Response and Analysis:**
+   -If the answer lies within the confines of the provided context, then  illuminate the path with illuminating insights and precise elucidation. However, if the answer eludes the grasp of the context,  will gracefully acknowledge the absence of pertinent information, affirming that the "answer is not available in the context."   
 
-In response to the user inquiry, I'll provide you with a comprehensive and exhaustive explanation rooted in the essence of the provided context. Let's leave no stone unturned in unraveling the intricacies and nuances embedded within the subject matter.
-
-**Response and Analysis:**
-
-If the answer lies within the confines of the provided context, I'll illuminate the path with illuminating insights and precise elucidation. However, if the answer eludes the grasp of the context, I'll gracefully acknowledge the absence of pertinent information, affirming that the "answer is not available in the context."
-"""
+---"""
 
     model = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.3)
     prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
@@ -92,16 +99,13 @@ def user_input(user_question):
 
     if user_question.strip().lower() in ["hello", "hi", "hey"]:
         # If it's a greeting, provide a custom response and exit the function
-      
         st.write("**Reply:**", "Hello! How can I assist you today? Please ask anything about GRIET.")
         return
 
     try:
-        response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
-      
+        response = chain.invoke({"input_documents": docs, "question": user_question}, return_only_outputs=True)
         st.write("**Reply:**", response["output_text"])
     except Exception as e:
-      
         st.write("**Reply:**", "Sorry, I couldn't process your request at the moment. Please try again later.")
         print(f"Error: {e}")
 
@@ -110,18 +114,24 @@ def main():
     st.set_page_config("GRIET-GPT", page_icon=":robot:")
     st.header(" GRIET-GPT : A Conversational AI for GRIET")
 
-
-
     # Get user input
     user_question = st.text_input("Ask Anything About GRIET:")
 
     # Handle user input
-    
     user_input(user_question)
 
-    pdf_docs = ['Griet.pdf']
-    raw_text = get_pdf_text(pdf_docs)
+    urls = ['https://www.griet.ac.in/', 'https://www.griet.ac.in/hods.php', 'https://www.griet.ac.in/programmes.php',"https://www.griet.ac.in/coordinators.php"]
+    pdf_docs = 'Griet.pdf'
+    
+    # Fetch URL text and PDF text using ThreadPoolExecutor with caching
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        url_texts = list(executor.map(fetch_url_text, urls))
+        pdf_texts = pdf_texts = [get_pdf_text(pdf_docs)]
+    
+    raw_text = '\n'.join(url_texts + pdf_texts)
     text_chunks = get_text_chunks(raw_text)
+    
+    # Create vector store
     get_vector_store(text_chunks)
 
 # Entry point

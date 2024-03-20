@@ -1,3 +1,4 @@
+import pickle
 import streamlit as st
 from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -22,7 +23,7 @@ genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 @lru_cache(maxsize=128)
 def fetch_url_text(url):
     try:
-        response = requests.get(url)
+        response = requests.get(url, timeout=10)
         soup = BeautifulSoup(response.content, 'html.parser')
         return soup.get_text(separator='\n')
     except Exception as e:
@@ -35,7 +36,6 @@ def get_pdf_text(pdf_docs):
     text = ""
     pdf_reader = PdfReader(pdf_docs)
     for page in pdf_reader.pages:
-        
         text += page.extract_text()
     return text
 
@@ -49,7 +49,8 @@ def get_text_chunks(text):
 def get_vector_store(text_chunks):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
     vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
-    vector_store.save_local("faiss_index")
+    with open("faiss_index.pickle", "wb") as f:
+        pickle.dump(vector_store, f)
 
 # Function to load conversational chain
 def get_conversational_chain():
@@ -93,7 +94,14 @@ def user_input(user_question):
         return
 
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    new_db = FAISS.load_local("faiss_index", embeddings)
+    
+    try:
+        with open("faiss_index.pickle", "rb") as f:
+            new_db = pickle.load(f)
+    except (FileNotFoundError, pickle.UnpicklingError):
+        st.write("**Reply:**", "Sorry, I couldn't process your request at the moment. Please try again later.")
+        return
+
     docs = new_db.similarity_search(user_question)
     chain = get_conversational_chain()
 
@@ -126,7 +134,7 @@ def main():
     # Fetch URL text and PDF text using ThreadPoolExecutor with caching
     with ThreadPoolExecutor(max_workers=5) as executor:
         url_texts = list(executor.map(fetch_url_text, urls))
-        pdf_texts = pdf_texts = [get_pdf_text(pdf_docs)]
+        pdf_texts = [get_pdf_text(pdf_docs)]
     
     raw_text = '\n'.join(url_texts + pdf_texts)
     text_chunks = get_text_chunks(raw_text)
